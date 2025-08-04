@@ -81,6 +81,7 @@ jobs:
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `target_repository` | The repository to search for (e.g., `owner/repo`) | Yes | - |
+| `ref_override` | Explicit ref to use (bypasses extraction) | No | - |
 | `default_ref` | Ref to use if extraction fails | No | Target repo's default branch |
 | `fail_on_multiple_refs` | Whether to fail if multiple different refs are found | No | `true` |
 
@@ -89,7 +90,7 @@ jobs:
 | Output | Description | Example |
 |--------|-------------|---------|
 | `ref` | The extracted ref or default | `v1.2.3`, `main`, `abc123` |
-| `extraction_method` | How the ref was determined | `extracted`, `default`, `error` |
+| `extraction_method` | How the ref was determined | `override`, `same-repo`, `extracted`, `default`, `error` |
 
 ## How It Works
 

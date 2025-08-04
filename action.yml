@@ -9,6 +9,10 @@ inputs:
   target_repository:
     description: 'The repository containing the called workflow (e.g., owner/repo)'
     required: true
+  ref_override:
+    description: 'Explicit ref to use (bypasses extraction when provided)'
+    required: false
+    default: ''
   default_ref:
     description: 'Default ref to use if extraction fails (if not provided, fetches target repository default branch)'
     required: false
@@ -37,7 +41,30 @@ runs:
       run: |
         echo "::group::Extract Called Workflow Ref"
         echo "Target repository: ${{ inputs.target_repository }}"
+        echo "Ref override: ${{ inputs.ref_override }}"
         echo "Fail on multiple refs: ${{ inputs.fail_on_multiple_refs }}"
+
+        # Check for explicit ref override
+        if [ -n "${{ inputs.ref_override }}" ]; then
+          echo "✅ Using explicit ref override: ${{ inputs.ref_override }}"
+          echo "ref=${{ inputs.ref_override }}" >> $GITHUB_OUTPUT
+          echo "method=override" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Check if running from within the target repository
+        if [[ "${{ github.repository }}" == "${{ inputs.target_repository }}" ]]; then
+          echo "✅ Running from within target repository, using current ref"
+          REF="${{ github.ref }}"
+          # Extract just the ref name (remove refs/heads/ or refs/tags/)
+          REF="${REF#refs/heads/}"
+          REF="${REF#refs/tags/}"
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+          echo "method=same-repo" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
 
         # Determine default ref
         if [ -n "${{ inputs.default_ref }}" ]; then
