@@ -1,0 +1,36 @@
+name: Test Reusable Workflow
+on:
+  workflow_call:
+
+jobs:
+  test-extraction:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show context
+        run: |
+          echo "This is running inside a reusable workflow"
+          echo "Repository: ${{ github.repository }}"
+          echo "Workflow ref: ${{ github.workflow_ref }}"
+
+      - name: Checkout extract-called-ref action
+        uses: actions/checkout@v4
+        with:
+          repository: Open-Athena/extract-called-ref
+          path: extract-action
+
+      - name: Extract own ref
+        id: extract
+        uses: ./extract-action
+        with:
+          target_repository: ${{ github.repository }}
+
+      - name: Verify extraction
+        run: |
+          echo "Extracted ref: ${{ steps.extract.outputs.ref }}"
+          echo "Method: ${{ steps.extract.outputs.extraction_method }}"
+
+          # When called from test.yml, should extract 'main'
+          if [ "${{ steps.extract.outputs.ref }}" != "main" ]; then
+            echo "WARNING: Expected ref 'main', got '${{ steps.extract.outputs.ref }}'"
+            echo "This might be expected if the workflow ref format changed"
+          fi

@@ -1,0 +1,149 @@
+name: 'Extract Called Workflow Ref'
+description: 'Extracts the ref (branch/tag/SHA) used to call a reusable workflow by parsing the caller workflow file'
+author: 'Open-Athena'
+branding:
+  icon: 'git-branch'
+  color: 'blue'
+
+inputs:
+  target_repository:
+    description: 'The repository containing the called workflow (e.g., owner/repo)'
+    required: true
+  default_ref:
+    description: 'Default ref to use if extraction fails (if not provided, fetches target repository default branch)'
+    required: false
+    default: ''
+  fail_on_multiple_refs:
+    description: 'Whether to fail if multiple different refs are found'
+    required: false
+    default: 'true'
+
+outputs:
+  ref:
+    description: 'The extracted ref (branch/tag/SHA) or default if extraction failed'
+    value: ${{ steps.extract.outputs.ref }}
+  extraction_method:
+    description: 'How the ref was determined (extracted, default, or error)'
+    value: ${{ steps.extract.outputs.method }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Extract ref from calling workflow
+      id: extract
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        echo "::group::Extract Called Workflow Ref"
+        echo "Target repository: ${{ inputs.target_repository }}"
+        echo "Fail on multiple refs: ${{ inputs.fail_on_multiple_refs }}"
+
+        # Determine default ref
+        if [ -n "${{ inputs.default_ref }}" ]; then
+          DEFAULT_REF="${{ inputs.default_ref }}"
+          echo "Default ref (provided): $DEFAULT_REF"
+        else
+          # Fetch target repository's default branch
+          echo "Fetching default branch for ${{ inputs.target_repository }}..."
+          DEFAULT_REF=$(gh api "repos/${{ inputs.target_repository }}" --jq '.default_branch' 2>/dev/null || echo "main")
+          echo "Default ref (fetched): $DEFAULT_REF"
+        fi
+        echo ""
+
+        # Debug: Show caller context
+        echo "=== Caller Context ==="
+        echo "Workflow: ${{ github.workflow }}"
+        echo "Workflow ref: ${{ github.workflow_ref }}"
+        echo "Repository: ${{ github.repository }}"
+        echo "Ref: ${{ github.ref }}"
+        echo ""
+
+        # Extract the workflow filename from workflow_ref
+        # Format: {owner}/{repo}/.github/workflows/{filename}@{ref}
+        WORKFLOW_REF="${{ github.workflow_ref }}"
+        WORKFLOW_FILE=$(echo "$WORKFLOW_REF" | sed -n 's|.*/\.github/workflows/\([^@]*\)@.*|\1|p')
+
+        if [ -z "$WORKFLOW_FILE" ]; then
+          echo "❌ Could not extract workflow filename from: $WORKFLOW_REF"
+          echo "Using default ref: $DEFAULT_REF"
+          echo "ref=$DEFAULT_REF" >> $GITHUB_OUTPUT
+          echo "method=default" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        echo "📄 Caller workflow file: $WORKFLOW_FILE"
+        echo ""
+
+        # Fetch the workflow file content
+        echo "⬇️ Fetching workflow file from ${{ github.repository }}..."
+        CONTENT=$(gh api \
+          -H "Accept: application/vnd.github.v3+json" \
+          "repos/${{ github.repository }}/contents/.github/workflows/$WORKFLOW_FILE?ref=${{ github.ref }}" \
+          --jq '.content' 2>/dev/null | base64 -d)
+
+        if [ -z "$CONTENT" ]; then
+          echo "❌ Failed to fetch workflow file"
+          echo "Using default ref: $DEFAULT_REF"
+          echo "ref=$DEFAULT_REF" >> $GITHUB_OUTPUT
+          echo "method=default" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        echo "✅ Successfully fetched workflow file"
+        echo ""
+
+        # Escape special regex characters in the repository name
+        ESCAPED_REPO=$(echo "${{ inputs.target_repository }}" | sed 's/[[\.*^$()+?{|]/\\&/g')
+
+        # Extract refs for the target repository using yq
+        # Look for patterns like: uses: {target_repository}/.github/workflows/.*@{ref}
+        # or uses: {target_repository}@{ref} (for actions)
+        echo "🔍 Searching for references to ${{ inputs.target_repository }}..."
+
+        # Try to find workflow references first
+        WORKFLOW_REFS=$(echo "$CONTENT" | yq ".jobs | to_entries | map(select(.value.uses | test(\"$ESCAPED_REPO/\\\\.github/workflows/.*@\")) | .value.uses | split(\"@\")[-1])[]" 2>/dev/null | sort | uniq)
+
+        # If no workflow refs found, try action references
+        if [ -z "$WORKFLOW_REFS" ]; then
+          WORKFLOW_REFS=$(echo "$CONTENT" | yq ".jobs[].steps[]?.uses | select(. | test(\"$ESCAPED_REPO@\")) | split(\"@\")[-1]" 2>/dev/null | sort | uniq)
+        fi
+
+        # Count unique refs
+        if [ -z "$WORKFLOW_REFS" ] || [ "$WORKFLOW_REFS" = "" ]; then
+          REF_COUNT=0
+        else
+          REF_COUNT=$(echo "$WORKFLOW_REFS" | grep -c . || echo "0")
+        fi
+
+        echo ""
+        echo "📊 Found $REF_COUNT unique ref(s)"
+
+        if [ "$REF_COUNT" -eq 0 ]; then
+          echo "⚠️ No references to ${{ inputs.target_repository }} found in workflow"
+          echo "Using default ref: $DEFAULT_REF"
+          echo "ref=$DEFAULT_REF" >> $GITHUB_OUTPUT
+          echo "method=default" >> $GITHUB_OUTPUT
+        elif [ "$REF_COUNT" -eq 1 ]; then
+          echo "✅ Found single ref: $WORKFLOW_REFS"
+          echo "ref=$WORKFLOW_REFS" >> $GITHUB_OUTPUT
+          echo "method=extracted" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️ Found multiple different refs for ${{ inputs.target_repository }}:"
+          echo "$WORKFLOW_REFS" | sed 's/^/  - /'
+
+          if [ "${{ inputs.fail_on_multiple_refs }}" = "true" ]; then
+            echo "❌ Cannot determine which ref to use"
+            echo "method=error" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          else
+            echo "Using default ref: $DEFAULT_REF"
+            echo "ref=$DEFAULT_REF" >> $GITHUB_OUTPUT
+            echo "method=default" >> $GITHUB_OUTPUT
+          fi
+        fi
+
+        echo "::endgroup::"

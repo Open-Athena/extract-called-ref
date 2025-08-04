@@ -1,0 +1,70 @@
+name: Test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-extraction:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test extracting from test workflow
+        id: test-extract
+        uses: ./
+        with:
+          target_repository: actions/checkout
+
+      - name: Verify extraction
+        run: |
+          echo "Extracted ref: ${{ steps.test-extract.outputs.ref }}"
+          echo "Method: ${{ steps.test-extract.outputs.extraction_method }}"
+
+          # Should extract 'v4' from the checkout action above
+          if [ "${{ steps.test-extract.outputs.ref }}" != "v4" ]; then
+            echo "ERROR: Expected ref 'v4', got '${{ steps.test-extract.outputs.ref }}'"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-extract.outputs.extraction_method }}" != "extracted" ]; then
+            echo "ERROR: Expected method 'extracted', got '${{ steps.test-extract.outputs.extraction_method }}'"
+            exit 1
+          fi
+
+  test-default:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test with non-existent target
+        id: test-default
+        uses: ./
+        with:
+          target_repository: fake/nonexistent-repo
+          default_ref: fallback-branch
+
+      - name: Verify default
+        run: |
+          echo "Extracted ref: ${{ steps.test-default.outputs.ref }}"
+          echo "Method: ${{ steps.test-default.outputs.extraction_method }}"
+
+          if [ "${{ steps.test-default.outputs.ref }}" != "fallback-branch" ]; then
+            echo "ERROR: Expected ref 'fallback-branch', got '${{ steps.test-default.outputs.ref }}'"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-default.outputs.extraction_method }}" != "default" ]; then
+            echo "ERROR: Expected method 'default', got '${{ steps.test-default.outputs.extraction_method }}'"
+            exit 1
+          fi
+
+  test-reusable-workflow:
+    uses: ./.github/workflows/test-reusable.yml@main
+
+  test-called-extraction:
+    needs: test-reusable-workflow
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Reusable workflow test completed"
