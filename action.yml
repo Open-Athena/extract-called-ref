@@ -105,18 +105,54 @@ runs:
 
         # Fetch the workflow file content
         echo "⬇️ Fetching workflow file from ${{ github.repository }}..."
-        CONTENT=$(gh api \
-          -H "Accept: application/vnd.github.v3+json" \
-          "repos/${{ github.repository }}/contents/.github/workflows/$WORKFLOW_FILE?ref=${{ github.ref }}" \
-          --jq '.content' 2>/dev/null | base64 -d)
+
+        # Try to read the file directly if it exists in the workspace
+        if [ -f ".github/workflows/$WORKFLOW_FILE" ]; then
+          echo "📁 Reading workflow file from local checkout..."
+          CONTENT=$(cat ".github/workflows/$WORKFLOW_FILE")
+        else
+          echo "📡 Fetching workflow file via API..."
+          API_RESPONSE=$(gh api \
+            -H "Accept: application/vnd.github.v3+json" \
+            "repos/${{ github.repository }}/contents/.github/workflows/$WORKFLOW_FILE?ref=${{ github.ref }}" 2>&1) || {
+            echo "❌ API call failed: $API_RESPONSE"
+            echo ""
+            echo "ℹ️ This often happens with private repos or insufficient permissions."
+            echo "ℹ️ Ensure the workflow has 'contents: read' permission or checkout the repo first."
+            echo ""
+            echo "❌ Cannot extract ref when workflow file is not accessible"
+            echo "method=error" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          }
+
+          # Extract content field and decode
+          CONTENT=$(echo "$API_RESPONSE" | jq -r '.content' 2>/dev/null)
+          if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+            echo "❌ No content field in API response"
+            echo "API Response (first 500 chars): ${API_RESPONSE:0:500}"
+            echo "❌ Cannot extract ref when workflow file content is not available"
+            echo "method=error" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          # Decode base64 content
+          CONTENT=$(echo "$CONTENT" | base64 -d 2>&1) || {
+            echo "❌ Failed to decode base64 content"
+            echo "❌ Cannot extract ref when workflow file cannot be decoded"
+            echo "method=error" >> $GITHUB_OUTPUT
+            echo "::endgroup::"
+            exit 1
+          }
+        fi
 
         if [ -z "$CONTENT" ]; then
-          echo "❌ Failed to fetch workflow file"
-          echo "Using default ref: $DEFAULT_REF"
-          echo "ref=$DEFAULT_REF" >> $GITHUB_OUTPUT
-          echo "method=default" >> $GITHUB_OUTPUT
+          echo "❌ Content is empty"
+          echo "❌ Cannot extract ref from empty workflow file"
+          echo "method=error" >> $GITHUB_OUTPUT
           echo "::endgroup::"
-          exit 0
+          exit 1
         fi
 
         echo "✅ Successfully fetched workflow file"
